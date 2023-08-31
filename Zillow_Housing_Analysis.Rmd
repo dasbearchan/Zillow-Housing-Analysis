@@ -1,0 +1,149 @@
+---
+title: "Zillow Housing Analysis Report (2018-2023)"
+author: "Brian Chang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set()
+knitr::opts_knit$set(root.dir = '~/Excel')
+```
+### I. Objective
+
+> Zillow is a popular American realtor marketplace tool that many homebuyers use to begin their search. The purpose of this analysis is to investigate the following questions:
+
+1. What states/regions in the U.S. have experienced the most mean growth in housing cost?
+2. Are there certain times of the year when housing prices grow/decline?
+3. What regions have the lowest list price compared to rate of percentage growth?
+
+### II. Preparation
+##### Load libraries and import dataset
+
+Source: https://www.zillow.com/research/data/
+
+* Category: List and Sale Prices
+* Data Type: Median List Price (Smooth, SFR Only, Weekly)
+* Geography: Metro & U.S.
+```{r echo=T, results='hide', message=F, warning=F}
+library(tidyverse)
+df_zil <- read_csv("Zillow_metro_mlp_uc_sfr_sm_week.csv")
+```
+```{r collapse=T}
+head(df_zil)
+```
+
+### III. Processing
+##### Transform to long data format
+```{r echo=T, results='hide', message=F, warning=F}
+df_zil_long <- df_zil %>% 
+                    pivot_longer(cols=starts_with("20"),
+                                 names_to="Date", 
+                                 values_to="MedianPrice")
+```
+```{r}
+colnames(df_zil_long)
+str(df_zil_long)
+```
+
+##### Convert string dates to Date class
+```{r echo=T, results='hide', message=F, warning=F}
+df_zil_clean <- df_zil_long %>%
+                      mutate(DateParsed = as.Date(Date,"%Y-%m-%d")) %>%
+                      select(-one_of("Date"))
+```
+```{r}
+str(df_zil_clean)
+```
+
+##### Check the date range of the dataset
+```{r collapse=T}
+min(df_zil_clean$DateParsed)
+max(df_zil_clean$DateParsed)
+```
+##### Remove null Date values
+```{r collapse=T}
+colSums(is.na(df_zil_clean))
+df_zil_clean <- df_zil_clean[complete.cases(df_zil_clean[,6]),]
+colSums(is.na(df_zil_clean))
+```
+
+### IV. Analysis
+##### Group regions together by state
+```{r echo=T, results='hide', message=F, warning=F}
+df_state <- df_zil_clean %>%
+              group_by(StateName, DateParsed) %>%
+              summarise(AvgPriceState = mean(MedianPrice)) #%>%
+              #filter(StateName == "NJ")
+```
+
+```{r collapse=T}
+head(df_state)
+```
+
+```{r}
+ggplot(df_state, aes(x = DateParsed, y = AvgPriceState, color = StateName)) +
+    geom_line() +
+    labs(title="Increase of Housing List Prices", y="Mean List Price") +
+    scale_y_continuous(labels=scales::comma) +
+    theme(axis.title.x=element_blank())
+```
+
+##### Calculate change in price from start to end date
+```{r echo=T, results='hide', message=F, warning=F}
+df_state_diff <- df_state %>%
+                  group_by(StateName) %>%
+                  mutate(Start = AvgPriceState[which.min(DateParsed)],
+                         End = AvgPriceState[which.max(DateParsed)],
+                         Diff = End - Start) %>%
+                  summarise(Start=mean(Start), End=mean(End), Diff=mean(Diff)) %>%
+                  arrange(desc(Diff))
+```
+
+```{r collapse=T}
+  head(df_state_diff)
+```
+
+##### i) What states/regions in the U.S. have experienced the most mean growth in housing cost?
+```{r}
+top_n(df_state_diff, n=20, Diff) %>%
+ggplot(., aes(x=reorder(StateName,-Diff), y=Diff)) +
+    geom_bar(stat="identity") +
+    labs(title="Top 20 States by Price Increase", y="Price Difference") +
+    scale_y_continuous(labels=scales::comma) +
+    theme(axis.title.x=element_blank())
+```
+
+##### ii) Are there certain times of the year when housing prices grow/decline?
+```{r}
+df_month <- df_zil_clean %>% 
+  filter(!is.na(StateName)) %>% 
+  group_by(Month=month(DateParsed)) %>% 
+  summarise(MeanPrice = mean(MedianPrice))
+
+df_month %>% ggplot(., aes(x=Month, y=MeanPrice)) +
+  geom_line() +
+  labs(title="U.S. Mean List Price Change by Month") +
+  scale_y_continuous(name="Mean Price", labels=scales::comma) +
+  scale_x_continuous(name="Month", breaks=seq(1,12))
+```
+
+##### iii) What regions have the lowest list price compared to rate of percentage growth?
+```{r}
+df_percent <- df_zil_clean %>% 
+    group_by(RegionName) %>%
+    mutate(Start = MedianPrice[which.min(DateParsed)],
+           End = MedianPrice[which.max(DateParsed)],
+           Diff = End - Start,
+           PcntInc = Diff / Start) %>%
+    filter(End < 200000) %>% # current price under $x
+    summarise(Start=mean(Start), End=mean(End), Diff=mean(Diff), PcntInc=mean(PcntInc)) %>%
+    arrange(desc(PcntInc))
+head(df_percent, 100)
+```
+### V. Conclusions
+
+* Certain states (e.g. Massachusetts, Hawaii, Idaho) experienced high mean growth in housing costs over the past five years (>\$300,000,000). Meanwhile others (e.g. Mississippi, Louisiana, Illinois) grew significantly less (<\$50,000). 
+
+* Listing prices tend to peak from mid-Spring to early-Summer (Apr-July), while dropping harshly during the winter season.
+
+* It is difficult to find housing for under \$100,000 in 2023, with housing prices soaring well beyond that. However, there are plenty of houses under \$200,000 that have experienced 50% or more increase in mean growth over the past 5 years.
